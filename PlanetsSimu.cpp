@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <vector>
 #include <map>
+#include <random>
 
 #define PI 3.141592653589
 #define E  2.718281828459 
@@ -64,8 +65,8 @@ class MassPoint {
 public:
 	MassPoint() :ID{ -1 }, pos{ Point3d{} }, vel{ Point3d{} }, mass{ DEFAULTMASS } {};
 	//the ID & position is required
-	MassPoint(int id,Point3d r, Point3d v = Point3d(), double m = DEFAULTMASS) :
-		pos{ r }, vel{ v }, mass{ m }, ID{id} {};
+	MassPoint(int id, Point3d r, Point3d v = Point3d(), double m = DEFAULTMASS) :
+		pos{ r }, vel{ v }, mass{ m }, ID{ id } {};
 	MassPoint(int id, const MassPoint& m) :
 		pos{ m.pos }, vel{ m.vel }, mass{ m.mass }, ID{ id } {};
 
@@ -93,10 +94,10 @@ public:
 	World& operator=(const World& w);
 
 private:
-	int StepCount{0};
+	int StepCount{ 0 };
 };
-void World::AddPlanet(const MassPoint& p) {Planets[p.ID] = p;}
-void World::DeletePlanet(const int& id) {Planets.erase(id);}
+void World::AddPlanet(const MassPoint& p) { Planets[p.ID] = p; }
+void World::DeletePlanet(const int& id) { Planets.erase(id); }
 World& World::operator=(const World& w) {
 	Planets = w.Planets;
 	SunMass = w.SunMass;
@@ -104,11 +105,11 @@ World& World::operator=(const World& w) {
 }
 
 ostream& operator << (ostream& os, const World& w) {
-	os << "SunMass=" << w.SunMass << ", Num="<<w.Planets.size()<<endl;
+	os << "SunMass=" << w.SunMass << ", Num=" << w.Planets.size() << endl;
 	for (auto i = w.Planets.begin(); i != w.Planets.end(); i++) {
 		os << "ID: " << i->first
-			<< ", pos=(" << i->second.pos.x << "," << i->second.pos.y << "," << i->second.pos.x << ")"
-			<< ", vel=(" << i->second.vel.x << "," << i->second.vel.y << "," << i->second.vel.x << ")" << endl;
+			<< ", pos=(" << i->second.pos.x << "," << i->second.pos.y << "," << i->second.pos.z << ")"
+			<< ", vel=(" << i->second.vel.x << "," << i->second.vel.y << "," << i->second.vel.z << ")" << endl;
 	}
 	os << "----------";
 	return os;
@@ -119,7 +120,7 @@ class Solver {
 public:
 	//m=method, w=initial World
 	Solver(int m, const World& w) :method{ m }, IniWorld{ w }, PreWorld{ w } {};
-	
+
 	//solve a single step(only applies on single-step mmethods)
 	void Step();
 	//solve for many steps
@@ -139,17 +140,17 @@ private:
 	//see the #define
 	int method;
 	//IniWorld stays constant, while Preworld processes the simulation 
-	World IniWorld,PreWorld;
+	World IniWorld, PreWorld;
 	//the Border
-	double rMax = 10000;
+	double rMax = 4000;
 	//step length
 	double h = 0.00001;
 	//to avoid divergence, set hMax
-	double hMax = 10;
+	double hMax = 0.2;
 	//expected precision, relative and absolute
 	double eRel = 0.00000001;
 	double eAbs = 0.0001;
-	
+
 
 	map<int, Point3d> VelDiff(const World&);
 	World& UpdateWorld(World&, map<int, Point3d>, double);
@@ -168,19 +169,19 @@ void Solver::Step() {
 	case METHOD_EULER_EX:
 		StepEulerEx();
 		break;
-	/*case METHOD_EULER_IM:
+		/*case METHOD_EULER_IM:
 		StepEulerIm();
 		break;
-	case METHOD_RK2_EX:
+		case METHOD_RK2_EX:
 		StepRK2Ex();
 		break;
-	case METHOD_RK2_IM:
+		case METHOD_RK2_IM:
 		StepRK2Im();
 		break;
-	case METHOD_RK2_HF:
+		case METHOD_RK2_HF:
 		StepRK2Hf();
 		break;
-	*/
+		*/
 		//use Euler method by default
 	default:
 		StepEulerEx();
@@ -189,7 +190,7 @@ void Solver::Step() {
 }
 
 void Solver::Solve(int step) {
-	for (int i = 0; i < step; i++) {Step();}
+	for (int i = 0; i < step; i++) { Step(); }
 }
 
 void Solver::ChangeMethod(int m) {
@@ -197,9 +198,9 @@ void Solver::ChangeMethod(int m) {
 	else throw runtime_error("Method: Unknown Method");
 }
 
-void Solver::ReSet() {PreWorld = IniWorld;}
+void Solver::ReSet() { PreWorld = IniWorld; }
 
-void Solver::PrintDetails(ostream & os){
+void Solver::PrintDetails(ostream & os) {
 	os << "step length(h)=" << h << ", err=" << eAbs + eRel*rMax << endl;
 }
 
@@ -237,7 +238,7 @@ double Solver::DeltaPos(const World& w1, const World& w2) {
 		//check 
 		w2.Planets.at(i->first).ID;
 		//diff
-		d += pow(Norm(w1.Planets.at(i->first).pos- w2.Planets.at(i->first).pos),2);
+		d += pow(Norm(w1.Planets.at(i->first).pos - w2.Planets.at(i->first).pos), 2);
 	}
 	return sqrt(d);
 }
@@ -259,6 +260,8 @@ void Solver::StepEulerEx() {
 	//Estimate err
 	//this coefficient comes from err esimation
 	const int ErrCoe = 2;
+
+	//! not rMax, but rMax();
 	double e = eRel*rMax + eAbs;
 	double d{ 0 };
 	World w1{ PreWorld };
@@ -281,6 +284,7 @@ void Solver::StepEulerEx() {
 
 			cout << "step length doubled, now h=" << h << endl;
 		}
+		//！距离过近会造成数值精确度严重下降，能量不守恒
 		while (d >= e) {
 			h /= 2;
 			w1 = PreWorld;
@@ -292,7 +296,7 @@ void Solver::StepEulerEx() {
 			cout << "step length halfed, now h=" << h << endl;
 		}
 	}
-	
+
 	//Update PreWorld
 	PreWorld = w2;
 	DetectBorder();
@@ -315,11 +319,17 @@ void World::AddFromKeyboard() {
 void World::Create() {
 	double x, y, z, vx, vy, vz, mass;
 	int id = 0;
+	random_device rd;  // 将用于为随机数引擎获得种子
+	std::mt19937 gen(rd()); // 以播种标准 mersenne_twister_engine
+	// max r=2000, can be modified
+	std::uniform_int_distribution<> dis(10, 2000);
+	
 	while (id<10) {
 		id++;
 		mass = 1;
-		x = 2000 * id;y = -50 * id;z = 0;
-		vx = 5 * id;vy = 10 * id;vz = 0;
+		// 用 dis 变换 gen 所生成的随机 unsigned int 到 [10, 2000] 中的 int
+		x = dis(gen); y = dis(gen); z = dis(gen);
+		vx = double(dis(gen)) / 500; vy = double(dis(gen)) / 500; vz = double(dis(gen)) / 500;
 		MassPoint p(id, Point3d{ x,y,z }, Point3d{ vx,vy,vz }, mass);
 		AddPlanet(p);
 	}
@@ -335,16 +345,16 @@ int main()
 
 	//create solver
 	Solver m_Solver{ METHOD_EULER_EX,m_World };
-	m_Solver.ChangeAbsErr(0.1);
-	m_Solver.ChangeRelErr(0.0001);
+	m_Solver.ChangeAbsErr(0.2);
+	m_Solver.ChangeRelErr(0);
 
 	ofstream ofs{ "output.txt" };
 	ofs << "Result:" << endl;
-	for (int i = 0; i < 1000; i++) {
+	for (int i = 0; i < 2000; i++) {
 		m_Solver.Step();
 		m_Solver.PrintDetails(ofs);
 		ofs << m_Solver.GetWorld() << endl;
 	}
 
-    return 0;
+	return 0;
 }
