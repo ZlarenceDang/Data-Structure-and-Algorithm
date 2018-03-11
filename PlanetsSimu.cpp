@@ -8,6 +8,7 @@
 #include <vector>
 #include <map>
 #include <random>
+#include <Windows.h>
 
 #define PI 3.141592653589
 #define E  2.718281828459 
@@ -86,6 +87,8 @@ public:
 	map<int, MassPoint> Planets;
 	double SunMass;
 
+	double rMax();
+
 	void AddPlanet(const MassPoint&);
 	void DeletePlanet(const int&);
 	void AddFromKeyboard();
@@ -96,6 +99,12 @@ public:
 private:
 	int StepCount{ 0 };
 };
+double World::rMax()
+{
+	double m{ 0 };
+	for (auto i = Planets.begin(); i != Planets.end(); i++) { m = (Norm(i->second.pos) > m) ? Norm(i->second.pos) : m; }
+	return m;
+}
 void World::AddPlanet(const MassPoint& p) { Planets[p.ID] = p; }
 void World::DeletePlanet(const int& id) { Planets.erase(id); }
 World& World::operator=(const World& w) {
@@ -142,7 +151,7 @@ private:
 	//IniWorld stays constant, while Preworld processes the simulation 
 	World IniWorld, PreWorld;
 	//the Border
-	double rMax = 4000;
+	double rMax = 50000;
 	//step length
 	double h = 0.00001;
 	//to avoid divergence, set hMax
@@ -150,6 +159,16 @@ private:
 	//expected precision, relative and absolute
 	double eRel = 0.00000001;
 	double eAbs = 0.0001;
+	//estimated err
+	double EstimatedErr;
+	//single step time
+	double StepTime;
+	//single time per unit simu time
+	double UnitTime;
+	//total system time
+	double SysTimeTot{ 0 };
+	//total simu time
+	double SimuTimeTot{ 0 };
 
 
 	map<int, Point3d> VelDiff(const World&);
@@ -158,20 +177,28 @@ private:
 	void DetectBorder();
 
 	void StepEulerEx();
-	//void StepEulerIm();
+	void StepEulerIm();
 	//void StepRK2Ex();
 	//void StepRK2Im();
 	//void StepRK2Hf();
+
+	World& StepEulerImStep(World&, double);
 };
 
+//record time
 void Solver::Step() {
+	LARGE_INTEGER t1, t2, tc;
+	QueryPerformanceFrequency(&tc);
+	QueryPerformanceCounter(&t1);
+	
 	switch (method) {
 	case METHOD_EULER_EX:
 		StepEulerEx();
 		break;
-		/*case METHOD_EULER_IM:
+		case METHOD_EULER_IM:
 		StepEulerIm();
 		break;
+		/*
 		case METHOD_RK2_EX:
 		StepRK2Ex();
 		break;
@@ -187,6 +214,11 @@ void Solver::Step() {
 		StepEulerEx();
 		break;
 	}
+	QueryPerformanceCounter(&t2);
+	StepTime = (t2.QuadPart - t1.QuadPart)*1.0 / tc.QuadPart;
+	UnitTime = StepTime / h;
+	SysTimeTot += StepTime;
+	SimuTimeTot += h;
 }
 
 void Solver::Solve(int step) {
@@ -201,7 +233,13 @@ void Solver::ChangeMethod(int m) {
 void Solver::ReSet() { PreWorld = IniWorld; }
 
 void Solver::PrintDetails(ostream & os) {
-	os << "step length(h)=" << h << ", err=" << eAbs + eRel*rMax << endl;
+	os << "step length(h)=" << h << ", err=" << eAbs + eRel*PreWorld.rMax()
+		<< ", estimated err=" << EstimatedErr
+		<< ", step time=" << StepTime
+		<< ", step time ratio=" << UnitTime
+		<< ", totaltime=" << SysTimeTot
+		<< ", average ratio=" << SysTimeTot / SimuTimeTot
+		<< endl;
 }
 
 map<int, Point3d> Solver::VelDiff(const World& w) {
@@ -251,7 +289,7 @@ void Solver::DetectBorder() {
 		}
 		else i++;
 	}
-	cout << "Border check finished!" << endl;
+	//cout << "Border check finished!" << endl;
 }
 
 void Solver::StepEulerEx() {
@@ -261,8 +299,7 @@ void Solver::StepEulerEx() {
 	//this coefficient comes from err esimation
 	const int ErrCoe = 2;
 
-	//! not rMax, but rMax();
-	double e = eRel*rMax + eAbs;
+	double e = eRel*PreWorld.rMax() + eAbs;
 	double d{ 0 };
 	World w1{ PreWorld };
 	World w2{ PreWorld };
@@ -271,7 +308,7 @@ void Solver::StepEulerEx() {
 	UpdateWorld(w2, VelDiff(w2), h / 2);
 	d = ErrCoe*DeltaPos(w1, w2);
 
-	//Change step length
+	//Change step length and Estimated err
 	if (d<e / 3 || d>e) {
 		while (d < e && h<hMax) {
 			h *= 2;
@@ -296,6 +333,75 @@ void Solver::StepEulerEx() {
 			cout << "step length halfed, now h=" << h << endl;
 		}
 	}
+	EstimatedErr = d;
+
+	//Update PreWorld
+	PreWorld = w2;
+	DetectBorder();
+}
+
+World& Solver::StepEulerImStep(World& ww, double hh) {
+	const int ErrCoe = 1;
+	double e = eRel*ww.rMax() + eAbs;
+	double d{ 0 };
+	World w1{ ww };
+	World w2{ ww };
+
+	//iteration method
+	UpdateWorld(w1, VelDiff(w1), h);
+	UpdateWorld(w2, VelDiff(w1), h);
+	d = ErrCoe*DeltaPos(w1, w2);
+	//iterate
+	while (d >= e) {
+		w1 = w2;
+		w2 = PreWorld;
+		UpdateWorld(w2, VelDiff(w1), h);
+		d = ErrCoe*DeltaPos(w1, w2);
+	}
+	ww = w2;
+	return ww;
+}
+
+void Solver::StepEulerIm() {
+	//Estimate err
+	//this coefficient comes from err esimation
+	const int ErrCoe = 2;
+
+	double e = eRel*PreWorld.rMax() + eAbs;
+	double d{ 0 };
+	World w1{ PreWorld };
+	World w2{ PreWorld };
+	
+	//Implicit solution
+	StepEulerImStep(w1, h);
+	StepEulerImStep(StepEulerImStep(w2, h/2),h/2);
+	d = ErrCoe*DeltaPos(w1, w2);
+
+	//Change step length and Estimated err
+	if (d<e / 3 || d>e) {
+		while (d < e && h<hMax) {
+			h *= 2;
+			w1 = PreWorld;
+			w2 = PreWorld;
+			StepEulerImStep(w1, h);
+			StepEulerImStep(StepEulerImStep(w2, h / 2), h / 2);
+			d = ErrCoe*DeltaPos(w1, w2);
+
+			cout << "step length doubled, now h=" << h << endl;
+		}
+		//！距离过近会造成数值精确度严重下降，能量不守恒
+		while (d >= e) {
+			h /= 2;
+			w1 = PreWorld;
+			w2 = PreWorld;
+			StepEulerImStep(w1, h);
+			StepEulerImStep(StepEulerImStep(w2, h / 2), h / 2);
+			d = ErrCoe*DeltaPos(w1, w2);
+
+			cout << "step length halfed, now h=" << h << endl;
+		}
+	}
+	EstimatedErr = d;
 
 	//Update PreWorld
 	PreWorld = w2;
@@ -319,17 +425,20 @@ void World::AddFromKeyboard() {
 void World::Create() {
 	double x, y, z, vx, vy, vz, mass;
 	int id = 0;
+	int ExpectedrMax = 5000;
 	random_device rd;  // 将用于为随机数引擎获得种子
 	std::mt19937 gen(rd()); // 以播种标准 mersenne_twister_engine
 	// max r=2000, can be modified
-	std::uniform_int_distribution<> dis(10, 2000);
+	std::uniform_int_distribution<> dis(10, 2 * ExpectedrMax);
 	
 	while (id<10) {
 		id++;
 		mass = 1;
 		// 用 dis 变换 gen 所生成的随机 unsigned int 到 [10, 2000] 中的 int
-		x = dis(gen); y = dis(gen); z = dis(gen);
-		vx = double(dis(gen)) / 500; vy = double(dis(gen)) / 500; vz = double(dis(gen)) / 500;
+		x = dis(gen) - ExpectedrMax / 2; y = dis(gen) - ExpectedrMax / 2; z = dis(gen) - ExpectedrMax / 2;
+		vx = double(dis(gen) - ExpectedrMax / 2) / ExpectedrMax * 10;
+		vy = double(dis(gen) - ExpectedrMax / 2) / ExpectedrMax * 10;
+		vz = double(dis(gen) - ExpectedrMax / 2) / ExpectedrMax * 10;
 		MassPoint p(id, Point3d{ x,y,z }, Point3d{ vx,vy,vz }, mass);
 		AddPlanet(p);
 	}
@@ -344,17 +453,16 @@ int main()
 	m_World.Create();
 
 	//create solver
-	Solver m_Solver{ METHOD_EULER_EX,m_World };
-	m_Solver.ChangeAbsErr(0.2);
-	m_Solver.ChangeRelErr(0);
+	Solver m_Solver{ METHOD_EULER_IM,m_World };
+	m_Solver.ChangeAbsErr(1.0);
+	m_Solver.ChangeRelErr(0.0002);
 
 	ofstream ofs{ "output.txt" };
 	ofs << "Result:" << endl;
-	for (int i = 0; i < 2000; i++) {
+	for (int i = 0; i < 50000 && m_Solver.GetWorld().Planets.size()>0; i++) { 
 		m_Solver.Step();
 		m_Solver.PrintDetails(ofs);
 		ofs << m_Solver.GetWorld() << endl;
 	}
-
 	return 0;
 }
